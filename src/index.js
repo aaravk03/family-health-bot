@@ -145,6 +145,43 @@ app.get('/dashboard', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/dashboard.html'));
 });
 
+// ─── Startup Diagnostics ──────────────────────────────────────────────────────
+
+/**
+ * Log current UTC and IST times, the day of week in IST, and the full
+ * reminder schedule so it is easy to verify crons are firing at the right time.
+ */
+function logStartupInfo() {
+  const now = new Date();
+
+  // IST = UTC + 5 hours 30 minutes
+  const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+  const istNow = new Date(now.getTime() + IST_OFFSET_MS);
+
+  const pad  = (n) => String(n).padStart(2, '0');
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+  const utcStr = `${now.getUTCFullYear()}-${pad(now.getUTCMonth()+1)}-${pad(now.getUTCDate())} ` +
+                 `${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())}:${pad(now.getUTCSeconds())} UTC`;
+
+  const istStr = `${istNow.getUTCFullYear()}-${pad(istNow.getUTCMonth()+1)}-${pad(istNow.getUTCDate())} ` +
+                 `${pad(istNow.getUTCHours())}:${pad(istNow.getUTCMinutes())}:${pad(istNow.getUTCSeconds())} IST`;
+
+  const istDay = days[istNow.getUTCDay()];
+
+  console.log('═'.repeat(60));
+  console.log(`[Startup] UTC time : ${utcStr}`);
+  console.log(`[Startup] IST time : ${istStr}`);
+  console.log(`[Startup] Day (IST): ${istDay}`);
+  console.log('[Startup] Reminder schedule (all times IST):');
+  console.log('  Weight  Mon/Wed/Fri: 7:00, 7:30, 8:00, 8:30, 9:00 AM  → Aarav alert 9:30 AM');
+  console.log('  Trainer Mon/Wed/Fri: 8:00 AM  →  11:00 AM  →  Aarav alert 1:00 PM');
+  console.log('  Walk    Daily      : 7:00–10:30 PM every 30 min  → Aarav alert 11:00 PM');
+  console.log('  Food    Daily      : 8 AM, 10 AM, 12 PM, 2 PM, 4 PM, 6 PM, 8 PM, 10 PM');
+  console.log('  Summary Daily      : 10:00 PM (mom calorie total)');
+  console.log('═'.repeat(60));
+}
+
 // ─── Start Server ─────────────────────────────────────────────────────────────
 async function start() {
   try {
@@ -157,6 +194,9 @@ async function start() {
       console.log(`[Server] Dashboard: http://localhost:${PORT}/dashboard`);
       console.log(`[Server] Health: http://localhost:${PORT}/health`);
     });
+
+    // Print startup diagnostics before crons start
+    logStartupInfo();
 
     // Initialize all cron jobs
     initCrons();

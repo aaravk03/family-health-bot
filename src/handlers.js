@@ -7,26 +7,15 @@ const {
 } = require('./claude');
 
 const RAILWAY_URL = process.env.RAILWAY_URL || `http://localhost:${process.env.PORT || 3000}`;
+const MOM_CALORIE_GOAL = 1200;
 
 // ─── DB Helpers ───────────────────────────────────────────────────────────────
 
-/**
- * Look up a user by their WhatsApp number.
- * @param {string} whatsapp - e.g. 'whatsapp:+15109902052'
- * @returns {object|null}
- */
 async function getUserByWhatsapp(whatsapp) {
   const res = await query('SELECT * FROM users WHERE whatsapp = $1', [whatsapp]);
   return res.rows[0] || null;
 }
 
-/**
- * Get today's reminder state row for a user + type.
- * Returns null if no reminder has been sent yet today.
- * @param {number} userId
- * @param {string} reminderType
- * @returns {object|null}
- */
 async function getReminderState(userId, reminderType) {
   const res = await query(
     `SELECT * FROM reminder_state
@@ -36,11 +25,6 @@ async function getReminderState(userId, reminderType) {
   return res.rows[0] || null;
 }
 
-/**
- * Mark a reminder completed for today (upsert).
- * @param {number} userId
- * @param {string} reminderType
- */
 async function markReminderComplete(userId, reminderType) {
   await query(
     `INSERT INTO reminder_state (user_id, reminder_type, date, completed)
@@ -51,12 +35,6 @@ async function markReminderComplete(userId, reminderType) {
   );
 }
 
-/**
- * Check whether a trainer reminder is pending today for a user.
- * Walk is no longer confirmed by text — it requires an outdoor photo.
- * @param {number} userId
- * @returns {boolean}
- */
 async function isTrainerPending(userId) {
   const res = await query(
     `SELECT id FROM reminder_state
@@ -65,6 +43,20 @@ async function isTrainerPending(userId) {
     [userId]
   );
   return res.rows.length > 0;
+}
+
+/**
+ * Return today's total logged calories for a user.
+ * Uses DATE(logged_at) since the food_logs table has no separate log_date column.
+ */
+async function getTodayCalorieTotal(userId) {
+  const res = await query(
+    `SELECT COALESCE(SUM(calories), 0) AS total
+     FROM food_logs
+     WHERE user_id = $1 AND DATE(logged_at) = CURRENT_DATE`,
+    [userId]
+  );
+  return parseInt(res.rows[0].total, 10);
 }
 
 // ─── Logging Helpers ──────────────────────────────────────────────────────────
@@ -85,58 +77,79 @@ async function logTrainer(userId) {
 }
 
 /**
- * Log a food entry. Does NOT block future check-ins (food reminder state is
- * managed separately by the cron skip logic in reminders.js).
- * @param {number} userId
- * @param {string} description
- * @param {string|null} imageUrl
- * @param {number|null} calories
+ * Insert a food entry. Marks the food reminder complete so the 90-min
+ * skip window in reminders.js is honoured.
  */
 async function logFood(userId, description, imageUrl, calories) {
   await query(
-    `INSERT INTO food_logs (user_id, description, image_url, calories) VALUES ($1, $2, $3, $4)`,
+    `INSERT INTO food_logs (user_id, description, image_url, calories)
+     VALUES ($1, $2, $3, $4)`,
     [userId, description, imageUrl ?? null, calories ?? null]
   );
-  // Mark food reminder complete so the 90-min skip window is honoured
   await markReminderComplete(userId, 'food');
 }
 
 // ─── Reply Builder ────────────────────────────────────────────────────────────
 
 /**
- * Build the food confirmation reply based on Claude's health rating.
+ * Build the food confirmation reply.
+ *
+ * For mom (role === 'mom'): appends a running calorie total and remaining
+ * budget against the 1200-calorie daily goal.
+ *
  * @param {{ calories: number|null, health: string|null, food: string, coach: string }} result
- * @returns {string}
+ * @param {number} userId
+ * @param {string} role
+ * @returns {Promise<string>}
  */
-function buildFoodReply(result) {
+async function buildFoodReply(result, userId, role) {
   const { calories, health, food, coach } = result;
   const calStr = calories !== null ? ` - ~${calories} calories` : '';
 
+  // Build the base message from the health rating
+  let base;
   if (health === 'UNHEALTHY') {
-    return `⚠️ ${food} logged${calStr}\n\n${coach}\n\n💪 You've got this - make a better choice next time!`;
+    base = `⚠️ ${food} logged${calStr}\n\n${coach}\n\n💪 You've got this - make a better choice next time!`;
+  } else if (health === 'HEALTHY') {
+    base = `🌟 ${food} logged${calStr}\n\n${coach} Keep crushing it! 💪`;
+  } else if (health === 'MODERATE') {
+    base = `✅ ${food} logged${calStr}\n\n${coach}`;
+  } else {
+    // Fallback when Claude didn't return a recognised health rating
+    base = calories !== null
+      ? `✅ ${food} logged${calStr}`
+      : `✅ Food logged! Thanks for keeping track 🍽️`;
   }
-  if (health === 'HEALTHY') {
-    return `🌟 ${food} logged${calStr}\n\n${coach} Keep crushing it! 💪`;
+
+  // ── Running calorie total (mom only) ────────────────────────────────────
+  if (role === 'mom') {
+    const total     = await getTodayCalorieTotal(userId);
+    const remaining = MOM_CALORIE_GOAL - total;
+
+    // Main 📊 line
+    const remainingDisplay = remaining > 0 ? remaining : 0;
+    base += `\n\n📊 Today so far: ~${total} calories | ${remainingDisplay} remaining of ${MOM_CALORIE_GOAL}`;
+
+    // Warning line (only one fires — over-limit takes priority)
+    if (remaining <= 0) {
+      base += `\n🚨 You've hit your ${MOM_CALORIE_GOAL} calorie limit for today! Try to avoid eating anything else.`;
+    } else if (remaining <= 200) {
+      base += `\n⚠️ Only ${remaining} calories left for today - be careful!`;
+    }
   }
-  if (health === 'MODERATE') {
-    return `✅ ${food} logged${calStr}\n\n${coach}`;
-  }
-  // Fallback if Claude didn't return a recognised health rating
-  return calories !== null
-    ? `✅ ${food} logged${calStr}`
-    : `✅ Food logged! Thanks for keeping track 🍽️`;
+
+  return base;
 }
 
 // ─── Main Handler ─────────────────────────────────────────────────────────────
 
 /**
- * Handle an incoming WhatsApp message.
- * Returns the reply string to send back to the user.
+ * Handle an incoming WhatsApp message and return the reply string.
  *
- * @param {string} from     - sender WhatsApp number
- * @param {string} body     - message text
- * @param {number} numMedia - number of media attachments
- * @param {string|null} mediaUrl - first media URL (Twilio)
+ * @param {string} from         - sender's WhatsApp number
+ * @param {string} body         - message body text
+ * @param {number} numMedia     - number of media attachments
+ * @param {string|null} mediaUrl - first Twilio media URL
  * @returns {Promise<string>}
  */
 async function handleIncomingMessage(from, body, numMedia, mediaUrl) {
@@ -157,8 +170,7 @@ async function handleIncomingMessage(from, body, numMedia, mediaUrl) {
 
   // ── Photo received ────────────────────────────────────────────────────────
   if (numMedia > 0 && mediaUrl) {
-    // Check whether a walk reminder is active today (i.e. a row exists and is incomplete).
-    // If yes, treat this photo as walk-proof and verify it's outdoors.
+    // If a walk reminder is active and incomplete, verify outdoor photo first.
     const walkState = await getReminderState(user.id, 'walk');
     if (walkState && !walkState.completed) {
       console.log(`[Handler] Walk pending for ${user.role} — verifying outdoor photo`);
@@ -166,16 +178,15 @@ async function handleIncomingMessage(from, body, numMedia, mediaUrl) {
       if (isOutdoor) {
         await logWalk(user.id);
         return '✅ Walk logged! Great job getting outside today 🌳💪 Keep it up!';
-      } else {
-        return '❌ That looks like an indoor photo! I need proof you went OUTSIDE. Take a photo outside and send it 🌳';
       }
+      return '❌ That looks like an indoor photo! I need proof you went OUTSIDE. Take a photo outside and send it 🌳';
     }
 
     // No pending walk — treat as a food photo
     console.log(`[Handler] Treating photo as food log for ${user.role}`);
     const result = await estimateCaloriesFromImage(mediaUrl);
     await logFood(user.id, result.food || 'Photo food log', mediaUrl, result.calories);
-    return buildFoodReply(result);
+    return await buildFoodReply(result, user.id, user.role);
   }
 
   // ── Weight: bare number like "65" or "65.2" ───────────────────────────────
@@ -185,15 +196,14 @@ async function handleIncomingMessage(from, body, numMedia, mediaUrl) {
     return `✅ Got it! Logged ${weightKg} kg. Keep it up! 💪`;
   }
 
-  // ── Confirmations: 'done', 'yes', 'completed', 'finished' ────────────────
-  // Walk now requires an outdoor photo, so text confirmations only cover trainer.
+  // ── Confirmations: 'done', 'yes', 'walked', 'completed', 'finished' ──────
+  // Walk now requires an outdoor photo — text confirms only cover trainer.
   const confirmWords = ['done', 'yes', 'walked', 'completed', 'finished'];
   if (confirmWords.includes(text)) {
     if (await isTrainerPending(user.id)) {
       await logTrainer(user.id);
       return "✅ Trainer session logged! You're crushing it 💪";
     }
-    // No trainer pending — remind them that walk needs a photo
     return "👍 Got it! If you're confirming your walk, please send an outdoor photo as proof 🌳📸";
   }
 
@@ -206,7 +216,7 @@ async function handleIncomingMessage(from, body, numMedia, mediaUrl) {
   // ── Everything else = text food log with calorie coaching ─────────────────
   const result = await estimateCaloriesFromText(body || text);
   await logFood(user.id, result.food || body || text, null, result.calories);
-  return buildFoodReply(result);
+  return await buildFoodReply(result, user.id, user.role);
 }
 
 module.exports = { handleIncomingMessage, getUserByWhatsapp };
