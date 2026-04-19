@@ -79,29 +79,15 @@ async function initDB() {
 
   console.log('[DB] Schema ready.');
 
-  // Seed default users — insert if the role doesn't exist yet.
-  // ON CONFLICT (whatsapp) DO NOTHING handles the case where the number
-  // hasn't changed; the UPDATE below handles number changes.
-  await query(
-    `INSERT INTO users (name, whatsapp, role) VALUES ('Mom', $1, 'mom')
-     ON CONFLICT (whatsapp) DO NOTHING`,
-    [process.env.MOM_WHATSAPP]
-  );
-  await query(
-    `INSERT INTO users (name, whatsapp, role) VALUES ('Dad', $1, 'dad')
-     ON CONFLICT (whatsapp) DO NOTHING`,
-    [process.env.DAD_WHATSAPP]
-  );
-  await query(
-    `INSERT INTO users (name, whatsapp, role) VALUES ('Aarav', $1, 'admin')
-     ON CONFLICT (whatsapp) DO NOTHING`,
-    [process.env.AARAV_WHATSAPP]
-  );
-
-  // Update whatsapp numbers by role so env var changes take effect on restart.
+  // Update existing users by role (handles number changes on restart)
   await query(`UPDATE users SET whatsapp = $1 WHERE role = 'mom'`,   [process.env.MOM_WHATSAPP]);
   await query(`UPDATE users SET whatsapp = $1 WHERE role = 'dad'`,   [process.env.DAD_WHATSAPP]);
   await query(`UPDATE users SET whatsapp = $1 WHERE role = 'admin'`, [process.env.AARAV_WHATSAPP]);
+
+  // Insert only if the role doesn't exist yet (first-time setup)
+  await query(`INSERT INTO users (name, whatsapp, role) SELECT 'Mom', $1, 'mom' WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'mom')`,   [process.env.MOM_WHATSAPP]);
+  await query(`INSERT INTO users (name, whatsapp, role) SELECT 'Dad', $1, 'dad' WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'dad')`,   [process.env.DAD_WHATSAPP]);
+  await query(`INSERT INTO users (name, whatsapp, role) SELECT 'Aarav', $1, 'admin' WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin')`, [process.env.AARAV_WHATSAPP]);
 
   console.log('[DB] Seed users ready.');
 }
