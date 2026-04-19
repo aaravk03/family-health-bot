@@ -16,7 +16,13 @@ async function estimateCaloriesFromImage(imageUrl) {
     const response = await fetch(imageUrl);
     const buffer = await response.arrayBuffer();
     const base64 = Buffer.from(buffer).toString('base64');
-    const contentType = response.headers.get('content-type') || 'image/jpeg';
+    let contentType = response.headers.get('content-type') || 'image/jpeg';
+    // Ensure it's a valid Claude media type
+    if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(contentType)) {
+      contentType = 'image/jpeg';
+    }
+    // Strip any parameters like charset
+    contentType = contentType.split(';')[0].trim();
 
     const message = await client.messages.create({
       model: 'claude-opus-4-6',
