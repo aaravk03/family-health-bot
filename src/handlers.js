@@ -1,5 +1,6 @@
 require('dotenv').config();
 const { query } = require('./db');
+const { estimateCaloriesFromImage, estimateCaloriesFromText } = require('./claude');
 
 const RAILWAY_URL = process.env.RAILWAY_URL || `http://localhost:${process.env.PORT || 3000}`;
 
@@ -95,12 +96,16 @@ async function logTrainer(userId) {
 }
 
 /**
- * Log a food entry (text or image) for a user.
+ * Log a food entry (text or image) for a user, including estimated calories.
+ * @param {number} userId
+ * @param {string} description
+ * @param {string|null} imageUrl
+ * @param {number|null} calories - estimated by Claude (null if estimation failed)
  */
-async function logFood(userId, description, imageUrl = null) {
+async function logFood(userId, description, imageUrl = null, calories = null) {
   await query(
-    `INSERT INTO food_logs (user_id, description, image_url) VALUES ($1, $2, $3)`,
-    [userId, description, imageUrl]
+    `INSERT INTO food_logs (user_id, description, image_url, calories) VALUES ($1, $2, $3, $4)`,
+    [userId, description, imageUrl, calories]
   );
   await markReminderComplete(userId, 'food');
 }
@@ -136,7 +141,11 @@ async function handleIncomingMessage(from, body, numMedia, mediaUrl) {
 
   // --- Image/food photo ---
   if (numMedia > 0 && mediaUrl) {
-    await logFood(user.id, body || 'Photo food log', mediaUrl);
+    const { calories, description, notes } = await estimateCaloriesFromImage(mediaUrl);
+    await logFood(user.id, description, mediaUrl, calories);
+    if (calories !== null) {
+      return `✅ Photo logged! Estimated ~${calories} calories 📸\n${description}${notes ? `\n💡 ${notes}` : ''}`;
+    }
     return '✅ Photo logged! Great job tracking your meals 📸';
   }
 
@@ -173,8 +182,12 @@ async function handleIncomingMessage(from, body, numMedia, mediaUrl) {
     return '👍 Got it, noted! Stay hydrated 💧';
   }
 
-  // --- Everything else = food log ---
-  await logFood(user.id, body || text, null);
+  // --- Everything else = food log (with text-based calorie estimation) ---
+  const { calories, notes } = await estimateCaloriesFromText(body || text);
+  await logFood(user.id, body || text, null, calories);
+  if (calories !== null) {
+    return `✅ Food logged! Estimated ~${calories} calories 🍽️${notes ? `\n💡 ${notes}` : ''}`;
+  }
   return '✅ Food logged! Thanks for keeping track 🍽️';
 }
 
