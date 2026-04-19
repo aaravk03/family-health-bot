@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Family Health Dashboard 🏥</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --card: #1a1d27;
+      --border: #2a2d3e;
+      --accent: #4f8ef7;
+      --green: #22c55e;
+      --red: #ef4444;
+      --yellow: #f59e0b;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --radius: 12px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      min-height: 100vh;
+      padding: 24px 16px;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+
+    header h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+
+    header p {
+      color: var(--muted);
+      margin-top: 6px;
+      font-size: 0.9rem;
+    }
+
+    .profiles {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 20px;
+      max-width: 900px;
+      margin: 0 auto 32px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+    }
+
+    .card h2 {
+      font-size: 1.3rem;
+      font-weight: 600;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .section-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    .weight-display {
+      font-size: 2.4rem;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 4px;
+    }
+
+    .weight-change {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-bottom: 16px;
+    }
+
+    /* Sparkline SVG */
+    .sparkline-container {
+      margin-bottom: 20px;
+    }
+
+    svg.sparkline {
+      display: block;
+      width: 100%;
+      height: 60px;
+      overflow: visible;
+    }
+
+    /* Walk / trainer streaks */
+    .streak-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 20px;
+    }
+
+    .streak-day {
+      width: 32px;
+      height: 32px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .streak-day.done { background: var(--green); }
+    .streak-day.missed { background: var(--red); }
+    .streak-day.future { background: var(--border); color: var(--muted); }
+
+    /* Food log */
+    .food-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+
+    .food-list li {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 0.85rem;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+    }
+
+    .food-list li .time {
+      color: var(--muted);
+      white-space: nowrap;
+      font-size: 0.75rem;
+      margin-top: 1px;
+    }
+
+    .no-data {
+      color: var(--muted);
+      font-size: 0.85rem;
+      font-style: italic;
+    }
+
+    /* Compliance section */
+    .compliance-section {
+      max-width: 900px;
+      margin: 0 auto 32px;
+    }
+
+    .compliance-section h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+
+    .compliance-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+    }
+
+    .compliance-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      text-align: center;
+    }
+
+    .compliance-pct {
+      font-size: 2rem;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .compliance-pct.good { color: var(--green); }
+    .compliance-pct.ok { color: var(--yellow); }
+    .compliance-pct.bad { color: var(--red); }
+
+    .compliance-label {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    footer {
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.8rem;
+      margin-top: 8px;
+    }
+
+    .divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 16px 0;
+    }
+
+    .loading {
+      text-align: center;
+      color: var(--muted);
+      padding: 60px;
+      font-size: 1rem;
+    }
+
+    .error-banner {
+      background: #3f1515;
+      border: 1px solid var(--red);
+      border-radius: 8px;
+      padding: 12px 16px;
+      color: #fca5a5;
+      text-align: center;
+      max-width: 900px;
+      margin: 0 auto 24px;
+      font-size: 0.9rem;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Family Health Dashboard 🏥</h1>
+  <p id="last-updated">Loading...</p>
+</header>
+
+<div class="error-banner" id="error-banner">⚠️ Could not load data. Retrying...</div>
+
+<div id="main-content" class="loading">Loading health data...</div>
+
+<footer>Auto-refreshing every 60s • <span id="footer-time"></span></footer>
+
+<script>
+  // ─── Utilities ──────────────────────────────────────────────────────────────
+
+  function fmtTime(isoStr) {
+    const d = new Date(isoStr);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function fmtDate(dateStr) {
+    const d = new Date(dateStr + 'T00:00:00');
+    return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+
+  // Build an array of the last 7 dates (YYYY-MM-DD) ending today
+  function last7Dates() {
+    const dates = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      dates.push(d.toISOString().split('T')[0]);
+    }
+    return dates;
+  }
+
+  // Day abbreviation from YYYY-MM-DD
+  function dayAbbr(dateStr) {
+    const d = new Date(dateStr + 'T00:00:00');
+    return ['Su','Mo','Tu','We','Th','Fr','Sa'][d.getDay()];
+  }
+
+  // ─── Sparkline ──────────────────────────────────────────────────────────────
+
+  function buildSparkline(weightLogs) {
+    // Take last 7 weight entries (most recent first → reverse for chronological)
+    const entries = [...weightLogs].reverse().slice(-7);
+    if (entries.length < 2) {
+      return `<p class="no-data">Not enough data for trend</p>`;
+    }
+
+    const weights = entries.map(e => parseFloat(e.weight_kg));
+    const minW = Math.min(...weights);
+    const maxW = Math.max(...weights);
+    const range = maxW - minW || 1;
+
+    const W = 280, H = 55, pad = 4;
+    const xStep = (W - pad * 2) / (weights.length - 1);
+
+    const points = weights.map((w, i) => {
+      const x = pad + i * xStep;
+      const y = H - pad - ((w - minW) / range) * (H - pad * 2);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    });
+
+    const polyline = points.join(' ');
+
+    // Fill area under line
+    const firstX = pad;
+    const lastX = pad + (weights.length - 1) * xStep;
+    const fillPath = `M${firstX},${H} L${points[0].replace(',', ' ')} L${points.slice(1).map(p => p.replace(',', ' ')).join(' L')} L${lastX.toFixed(1)},${H} Z`;
+
+    return `
+      <div class="sparkline-container">
+        <div class="section-label">Weight Trend (last ${weights.length} entries)</div>
+        <svg class="sparkline" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#4f8ef7" stop-opacity="0.3"/>
+              <stop offset="100%" stop-color="#4f8ef7" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <path d="${fillPath}" fill="url(#sg)" />
+          <polyline points="${polyline}" fill="none" stroke="#4f8ef7" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+          ${weights.map((w, i) => {
+            const x = pad + i * xStep;
+            const y = H - pad - ((w - minW) / range) * (H - pad * 2);
+            return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="#4f8ef7"/>`;
+          }).join('')}
+        </svg>
+        <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#94a3b8;margin-top:4px;">
+          <span>${minW} kg</span><span>${maxW} kg</span>
+        </div>
+      </div>`;
+  }
+
+  // ─── Streak Row ─────────────────────────────────────────────────────────────
+
+  function buildStreak(logs, type) {
+    const dates = last7Dates();
+    const loggedDates = new Set(logs.map(l => l.log_date?.split('T')[0] || l.log_date));
+    const today = new Date().toISOString().split('T')[0];
+
+    return `
+      <div class="section-label">${type === 'walk' ? '🚶‍♀️ Walk' : '💪 Trainer'} – Last 7 Days</div>
+      <div class="streak-row">
+        ${dates.map(d => {
+          const isFuture = d > today;
+          const isDone = loggedDates.has(d);
+          const cls = isFuture ? 'future' : isDone ? 'done' : 'missed';
+          return `<div class="streak-day ${cls}" title="${fmtDate(d)}">${dayAbbr(d)}</div>`;
+        }).join('')}
+      </div>`;
+  }
+
+  // ─── Food List ──────────────────────────────────────────────────────────────
+
+  function buildFoodList(foodLogs) {
+    if (!foodLogs || foodLogs.length === 0) {
+      return `<p class="no-data">No food logged today</p>`;
+    }
+    const items = foodLogs.map(f => `
+      <li>
+        <span class="time">${fmtTime(f.logged_at)}</span>
+        <span>${f.image_url ? '📸 ' : ''}${f.description || 'Photo'}</span>
+      </li>`).join('');
+    return `<ul class="food-list">${items}</ul>`;
+  }
+
+  // ─── Compliance Color ───────────────────────────────────────────────────────
+
+  function complianceClass(pct) {
+    if (pct === null) return '';
+    if (pct >= 75) return 'good';
+    if (pct >= 50) return 'ok';
+    return 'bad';
+  }
+
+  // ─── Render ─────────────────────────────────────────────────────────────────
+
+  function render(data) {
+    const roles = ['mom', 'dad'].filter(r => data[r]);
+
+    // Profile cards
+    const cardsHTML = roles.map(role => {
+      const d = data[role];
+      const latestWeight = d.weightLogs[0];
+      const prevWeight = d.weightLogs[1];
+
+      let weightHTML = '';
+      if (latestWeight) {
+        const change = prevWeight
+          ? (parseFloat(latestWeight.weight_kg) - parseFloat(prevWeight.weight_kg)).toFixed(1)
+          : null;
+        const changeStr = change !== null
+          ? (change > 0 ? `▲ ${change} kg` : change < 0 ? `▼ ${Math.abs(change)} kg` : '→ no change')
+          : '';
+        const changeColor = change > 0 ? 'color:var(--red)' : change < 0 ? 'color:var(--green)' : 'color:var(--muted)';
+        weightHTML = `
+          <div class="section-label">⚖️ Latest Weight</div>
+          <div class="weight-display">${parseFloat(latestWeight.weight_kg).toFixed(1)} kg</div>
+          <div class="weight-change" style="${changeColor}">${changeStr} from previous</div>`;
+      } else {
+        weightHTML = `<div class="section-label">⚖️ Latest Weight</div><p class="no-data">No weight logged yet</p><br>`;
+      }
+
+      const sparkline = buildSparkline(d.weightLogs);
+      const walkStreak = buildStreak(d.walkLogs, 'walk');
+      const trainerStreak = role === 'mom' ? buildStreak(d.trainerLogs, 'trainer') : '';
+
+      return `
+        <div class="card">
+          <h2>${role === 'mom' ? '👩' : '👨'} ${d.name}</h2>
+          ${weightHTML}
+          ${sparkline}
+          <hr class="divider">
+          ${walkStreak}
+          ${trainerStreak ? `<hr class="divider">${trainerStreak}` : ''}
+          <hr class="divider">
+          <div class="section-label">🍽️ Today's Food Log</div>
+          ${buildFoodList(d.todayFoodLogs)}
+        </div>`;
+    }).join('');
+
+    // Compliance cards
+    const compCards = roles.map(role => {
+      const d = data[role];
+      const pct = d.compliancePercent;
+      const display = pct !== null ? `${pct}%` : 'N/A';
+      return `
+        <div class="compliance-card">
+          <div class="compliance-pct ${complianceClass(pct)}">${display}</div>
+          <div class="compliance-label">${d.name} – This Week</div>
+        </div>`;
+    }).join('');
+
+    document.getElementById('main-content').innerHTML = `
+      <div class="profiles">${cardsHTML}</div>
+      <div class="compliance-section">
+        <h2>📊 Weekly Compliance</h2>
+        <div class="compliance-cards">${compCards}</div>
+      </div>`;
+  }
+
+  // ─── Fetch & Refresh ────────────────────────────────────────────────────────
+
+  async function fetchData() {
+    try {
+      const res = await fetch('/api/dashboard');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+
+      document.getElementById('error-banner').style.display = 'none';
+      render(data);
+
+      const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      document.getElementById('last-updated').textContent = `Last updated: ${now}`;
+      document.getElementById('footer-time').textContent = now;
+    } catch (err) {
+      console.error('Dashboard fetch error:', err);
+      document.getElementById('error-banner').style.display = 'block';
+    }
+  }
+
+  // Initial load + auto-refresh every 60 seconds
+  fetchData();
+  setInterval(fetchData, 60_000);
+</script>
+</body>
+</html>
