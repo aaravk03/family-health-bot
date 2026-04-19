@@ -3,36 +3,43 @@ const Anthropic = require('@anthropic-ai/sdk');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+// Valid image MIME types accepted by the Claude API
+const VALID_MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+
 /**
- * Use Claude Vision to estimate calories from a food photo.
- * Fetches the image, converts to base64, and sends to claude-opus-4-6.
+ * Fetch a Twilio-hosted image with Basic Auth and return { base64, contentType }.
+ * Shared by both food analysis and outdoor verification.
+ */
+async function fetchTwilioImage(imageUrl) {
+  const authHeader = 'Basic ' + Buffer.from(
+    process.env.TWILIO_ACCOUNT_SID + ':' + process.env.TWILIO_AUTH_TOKEN
+  ).toString('base64');
+
+  const response = await fetch(imageUrl, { headers: { 'Authorization': authHeader } });
+  const buffer = await response.arrayBuffer();
+  const base64 = Buffer.from(buffer).toString('base64');
+
+  // Strip parameters (e.g. "; charset=utf-8") and fall back to jpeg if not recognised
+  let contentType = (response.headers.get('content-type') || 'image/jpeg').split(';')[0].trim();
+  if (!VALID_MEDIA_TYPES.includes(contentType)) contentType = 'image/jpeg';
+
+  return { base64, contentType };
+}
+
+/**
+ * Use Claude Vision to analyse a food photo.
+ * Returns calories, health rating, food name, and a coaching message.
  *
- * @param {string} imageUrl - Publicly accessible URL of the food photo (e.g. from Twilio)
- * @returns {{ calories: number|null, description: string, notes: string }}
+ * @param {string} imageUrl - Twilio media URL
+ * @returns {{ calories: number|null, health: string|null, food: string, coach: string }}
  */
 async function estimateCaloriesFromImage(imageUrl) {
   try {
-    // Fetch image bytes with Twilio Basic Auth (media URLs require authentication)
-    const authHeader = 'Basic ' + Buffer.from(
-      process.env.TWILIO_ACCOUNT_SID + ':' + process.env.TWILIO_AUTH_TOKEN
-    ).toString('base64');
-
-    const response = await fetch(imageUrl, {
-      headers: { 'Authorization': authHeader }
-    });
-    const buffer = await response.arrayBuffer();
-    const base64 = Buffer.from(buffer).toString('base64');
-    let contentType = response.headers.get('content-type') || 'image/jpeg';
-    // Ensure it's a valid Claude media type
-    if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(contentType)) {
-      contentType = 'image/jpeg';
-    }
-    // Strip any parameters like charset
-    contentType = contentType.split(';')[0].trim();
+    const { base64, contentType } = await fetchTwilioImage(imageUrl);
 
     const message = await client.messages.create({
       model: 'claude-opus-4-6',
-      max_tokens: 300,
+      max_tokens: 400,
       messages: [{
         role: 'user',
         content: [
@@ -42,61 +49,133 @@ async function estimateCaloriesFromImage(imageUrl) {
           },
           {
             type: 'text',
-            text: 'Look at this food/meal photo. Estimate the total calories. Reply in this exact format only: CALORIES: [number] | DESCRIPTION: [brief 1 line description of what you see] | NOTES: [any health notes in 5 words max]. If no food is visible, reply: CALORIES: 0 | DESCRIPTION: No food detected | NOTES: Please send a food photo'
+            text: `Analyze this food photo. Provide:
+1. What food you see
+2. Estimated calories
+3. Health rating: UNHEALTHY, MODERATE, or HEALTHY
+4. Coaching message based on the rating
+
+Reply in EXACTLY this format:
+CALORIES: [number]
+HEALTH: [UNHEALTHY/MODERATE/HEALTHY]
+FOOD: [what you see, 1 line]
+COACH: [your coaching message]
+
+Coaching guidelines:
+- UNHEALTHY (junk food, fried, processed, high sugar): Be direct but kind. Tell her this isn't good for her weight loss goals, explain why briefly, suggest a healthier alternative
+- MODERATE (okay but not ideal): Acknowledge it's not bad but suggest improvements
+- HEALTHY (vegetables, fruits, lean protein, whole grains): Be genuinely encouraging and enthusiastic`
           }
         ]
       }]
     });
 
     const text = message.content[0].text;
-    const caloriesMatch = text.match(/CALORIES:\s*(\d+)/);
-    const descMatch = text.match(/DESCRIPTION:\s*([^|]+)/);
-    const notesMatch = text.match(/NOTES:\s*(.+)/);
+    console.log(`[Claude Vision] Raw result:\n${text}`);
 
-    console.log(`[Claude Vision] Parsed result: ${text}`);
+    const caloriesMatch = text.match(/CALORIES:\s*(\d+)/);
+    const healthMatch   = text.match(/HEALTH:\s*(UNHEALTHY|MODERATE|HEALTHY)/i);
+    const foodMatch     = text.match(/FOOD:\s*([^\n]+)/);
+    const coachMatch    = text.match(/COACH:\s*([\s\S]+?)(?:\n[A-Z]+:|$)/);
 
     return {
       calories: caloriesMatch ? parseInt(caloriesMatch[1]) : null,
-      description: descMatch ? descMatch[1].trim() : 'Food logged',
-      notes: notesMatch ? notesMatch[1].trim() : ''
+      health:   healthMatch   ? healthMatch[1].toUpperCase() : null,
+      food:     foodMatch     ? foodMatch[1].trim() : 'Food',
+      coach:    coachMatch    ? coachMatch[1].trim() : '',
     };
   } catch (err) {
     console.error('[Claude Vision] Error:', err.message);
-    return { calories: null, description: 'Food logged', notes: '' };
+    return { calories: null, health: null, food: 'Food logged', coach: '' };
   }
 }
 
 /**
- * Use Claude to estimate calories from a text food description.
+ * Use Claude to analyse a text food description.
+ * Returns calories, health rating, and a coaching message.
  *
- * @param {string} description - Text description of the food/meal
- * @returns {{ calories: number|null, notes: string }}
+ * @param {string} description - Text description of the meal
+ * @returns {{ calories: number|null, health: string|null, coach: string }}
  */
 async function estimateCaloriesFromText(description) {
   try {
     const message = await client.messages.create({
       model: 'claude-opus-4-6',
-      max_tokens: 200,
+      max_tokens: 300,
       messages: [{
         role: 'user',
-        content: `Estimate calories for this meal/food: "${description}". Reply in this exact format only: CALORIES: [number] | NOTES: [brief health note in 5 words max]`
+        content: `Analyze this food/meal: "${description}"
+
+Reply in EXACTLY this format:
+CALORIES: [number]
+HEALTH: [UNHEALTHY/MODERATE/HEALTHY]
+FOOD: [brief name/description, 1 line]
+COACH: [your coaching message]
+
+Coaching guidelines:
+- UNHEALTHY (junk food, fried, processed, high sugar): Be direct but kind. Tell her this isn't good for her weight loss goals, explain why briefly, suggest a healthier alternative
+- MODERATE (okay but not ideal): Acknowledge it's not bad but suggest improvements
+- HEALTHY (vegetables, fruits, lean protein, whole grains): Be genuinely encouraging and enthusiastic`
       }]
     });
 
     const text = message.content[0].text;
-    const caloriesMatch = text.match(/CALORIES:\s*(\d+)/);
-    const notesMatch = text.match(/NOTES:\s*(.+)/);
+    console.log(`[Claude Text] Raw result:\n${text}`);
 
-    console.log(`[Claude Text] Parsed result: ${text}`);
+    const caloriesMatch = text.match(/CALORIES:\s*(\d+)/);
+    const healthMatch   = text.match(/HEALTH:\s*(UNHEALTHY|MODERATE|HEALTHY)/i);
+    const foodMatch     = text.match(/FOOD:\s*([^\n]+)/);
+    const coachMatch    = text.match(/COACH:\s*([\s\S]+?)(?:\n[A-Z]+:|$)/);
 
     return {
       calories: caloriesMatch ? parseInt(caloriesMatch[1]) : null,
-      notes: notesMatch ? notesMatch[1].trim() : ''
+      health:   healthMatch   ? healthMatch[1].toUpperCase() : null,
+      food:     foodMatch     ? foodMatch[1].trim() : description,
+      coach:    coachMatch    ? coachMatch[1].trim() : '',
     };
   } catch (err) {
     console.error('[Claude Text] Error:', err.message);
-    return { calories: null, notes: '' };
+    return { calories: null, health: null, food: description, coach: '' };
   }
 }
 
-module.exports = { estimateCaloriesFromImage, estimateCaloriesFromText };
+/**
+ * Use Claude Vision to verify whether a photo was taken outdoors.
+ * Returns true if outdoor, false if indoor or unverifiable.
+ *
+ * @param {string} imageUrl - Twilio media URL
+ * @returns {boolean}
+ */
+async function verifyOutdoorPhoto(imageUrl) {
+  try {
+    const { base64, contentType } = await fetchTwilioImage(imageUrl);
+
+    const message = await client.messages.create({
+      model: 'claude-opus-4-6',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: contentType, data: base64 }
+          },
+          {
+            type: 'text',
+            text: 'Is this photo taken outdoors/outside? Look for sky, street, trees, buildings, outdoor environment. Reply with only: OUTDOOR: YES or OUTDOOR: NO and a brief reason'
+          }
+        ]
+      }]
+    });
+
+    const text = message.content[0].text;
+    console.log(`[Claude Outdoor] Result: ${text}`);
+    return /OUTDOOR:\s*YES/i.test(text);
+  } catch (err) {
+    console.error('[Claude Outdoor] Error:', err.message);
+    // Fail safe — don't confirm walk if verification fails
+    return false;
+  }
+}
+
+module.exports = { estimateCaloriesFromImage, estimateCaloriesFromText, verifyOutdoorPhoto };
