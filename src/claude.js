@@ -12,8 +12,14 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
  */
 async function estimateCaloriesFromImage(imageUrl) {
   try {
-    // Fetch image bytes and convert to base64
-    const response = await fetch(imageUrl);
+    // Fetch image bytes with Twilio Basic Auth (media URLs require authentication)
+    const authHeader = 'Basic ' + Buffer.from(
+      process.env.TWILIO_ACCOUNT_SID + ':' + process.env.TWILIO_AUTH_TOKEN
+    ).toString('base64');
+
+    const response = await fetch(imageUrl, {
+      headers: { 'Authorization': authHeader }
+    });
     const buffer = await response.arrayBuffer();
     const base64 = Buffer.from(buffer).toString('base64');
     let contentType = response.headers.get('content-type') || 'image/jpeg';
