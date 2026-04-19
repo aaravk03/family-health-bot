@@ -9,11 +9,46 @@ const pool = new Pool({
 
 /**
  * Run a query against the database.
- * Returns rows from the result.
+ * Returns the full pg result object.
  */
 async function query(text, params) {
   const res = await pool.query(text, params);
   return res;
+}
+
+/**
+ * Seed users table, handling both first-run inserts and number updates.
+ * Drops the unique constraint on whatsapp first so number changes never conflict.
+ */
+async function seedUsers() {
+  // Remove the unique constraint so changing a whatsapp number never blocks startup
+  await query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_whatsapp_key`);
+
+  // Mom
+  const mom = await query(`SELECT id FROM users WHERE role = 'mom'`);
+  if (mom.rows.length === 0) {
+    await query(`INSERT INTO users (name, whatsapp, role) VALUES ('Mom', $1, 'mom')`, [process.env.MOM_WHATSAPP]);
+  } else {
+    await query(`UPDATE users SET whatsapp = $1 WHERE role = 'mom'`, [process.env.MOM_WHATSAPP]);
+  }
+
+  // Dad
+  const dad = await query(`SELECT id FROM users WHERE role = 'dad'`);
+  if (dad.rows.length === 0) {
+    await query(`INSERT INTO users (name, whatsapp, role) VALUES ('Dad', $1, 'dad')`, [process.env.DAD_WHATSAPP]);
+  } else {
+    await query(`UPDATE users SET whatsapp = $1 WHERE role = 'dad'`, [process.env.DAD_WHATSAPP]);
+  }
+
+  // Admin (Aarav)
+  const admin = await query(`SELECT id FROM users WHERE role = 'admin'`);
+  if (admin.rows.length === 0) {
+    await query(`INSERT INTO users (name, whatsapp, role) VALUES ('Aarav', $1, 'admin')`, [process.env.AARAV_WHATSAPP]);
+  } else {
+    await query(`UPDATE users SET whatsapp = $1 WHERE role = 'admin'`, [process.env.AARAV_WHATSAPP]);
+  }
+
+  console.log('[DB] Seed users ready.');
 }
 
 /**
@@ -28,7 +63,7 @@ async function initDB() {
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
-      whatsapp TEXT NOT NULL UNIQUE,
+      whatsapp TEXT NOT NULL,
       role TEXT NOT NULL
     );
 
@@ -79,17 +114,8 @@ async function initDB() {
 
   console.log('[DB] Schema ready.');
 
-  // Update existing users by role (handles number changes on restart)
-  await query(`UPDATE users SET whatsapp = $1 WHERE role = 'mom'`,   [process.env.MOM_WHATSAPP]);
-  await query(`UPDATE users SET whatsapp = $1 WHERE role = 'dad'`,   [process.env.DAD_WHATSAPP]);
-  await query(`UPDATE users SET whatsapp = $1 WHERE role = 'admin'`, [process.env.AARAV_WHATSAPP]);
-
-  // Insert only if the role doesn't exist yet (first-time setup)
-  await query(`INSERT INTO users (name, whatsapp, role) SELECT 'Mom', $1, 'mom' WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'mom')`,   [process.env.MOM_WHATSAPP]);
-  await query(`INSERT INTO users (name, whatsapp, role) SELECT 'Dad', $1, 'dad' WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'dad')`,   [process.env.DAD_WHATSAPP]);
-  await query(`INSERT INTO users (name, whatsapp, role) SELECT 'Aarav', $1, 'admin' WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin')`, [process.env.AARAV_WHATSAPP]);
-
-  console.log('[DB] Seed users ready.');
+  // Drop the unique constraint on whatsapp and seed/update users
+  await seedUsers();
 }
 
 module.exports = { query, initDB };
